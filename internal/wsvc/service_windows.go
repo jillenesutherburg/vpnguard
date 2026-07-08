@@ -391,6 +391,20 @@ func Install() error {
 		DisplayName: "VPNGuard kill switch",
 		Description: "Fail-closed VPN kill switch and tunnel supervisor",
 		StartType:   mgr.StartAutomatic,
+		// Зависимости решают порядок старта:
+		//  - BFE (Base Filtering Engine): без него WFP не работает вообще,
+		//    поэтому наша служба обязана стартовать ПОСЛЕ него;
+		//  - Tcpip: сеть должна существовать к моменту применения фильтров.
+		// Windows гарантирует, что зависимости стартуют раньше нас.
+		//
+		// ВАЖНО про OpenVPN: сделать так, чтобы мы стартовали строго раньше
+		// службы OpenVPN, зависимостью нельзя (это создаст обратную связь и
+		// зависит от того, как именно у пользователя запущен OpenVPN). Окно
+		// между загрузкой Windows и применением наших фильтров закрывается
+		// НЕ порядком служб, а persistent-режимом: при persistent=true
+		// фильтры уже лежат в ядре с прошлой сессии и блокируют трафик ещё
+		// до старта нашей службы. Это и есть настоящий fail-closed на boot.
+		Dependencies: []string{"BFE", "Tcpip"},
 	}, "service", "run")
 	if err != nil {
 		return err

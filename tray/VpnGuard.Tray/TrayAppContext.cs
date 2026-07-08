@@ -27,6 +27,7 @@ public sealed class TrayAppContext : ApplicationContext
     private const string TaskName = "VPNGuard Tray";
 
     private readonly NotifyIcon _icon;
+    private ToolStripMenuItem _miAutostart = null!;
     private readonly System.Windows.Forms.Timer _timer;
 
     private readonly ToolStripMenuItem _miStatus;
@@ -58,11 +59,17 @@ public sealed class TrayAppContext : ApplicationContext
         menu.Items.Add(new ToolStripMenuItem("Открыть лог службы", null, (_, _) => OpenInNotepad(GuardConfig.LogPath)));
         menu.Items.Add(new ToolStripMenuItem("Перечитать конфиг", null, (_, _) => Reload()));
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Автозапуск без UAC (планировщик)", null, (_, _) => SetupAutostart()));
-        menu.Items.Add(new ToolStripMenuItem("Убрать автозапуск", null, (_, _) => RemoveAutostart()));
+        _miAutostart = new ToolStripMenuItem("Автозапуск при входе (без UAC)", null, (_, _) => ToggleAutostart())
+        {
+            CheckOnClick = false, // состояние определяем сами по наличию задачи
+        };
+        menu.Items.Add(_miAutostart);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Аварийно снять все фильтры (panic)", null, (_, _) => Panic()));
         menu.Items.Add(new ToolStripMenuItem("Выход (служба продолжит работать)", null, (_, _) => ExitApp()));
+
+        // отражаем текущее состояние автозапуска при открытии меню
+        menu.Opening += (_, _) => _miAutostart.Checked = AutostartTaskExists();
 
         _icon = new NotifyIcon
         {
@@ -277,7 +284,15 @@ public sealed class TrayAppContext : ApplicationContext
 
     // ------------------------------------------------------------------ автозапуск без UAC
 
-    private void SetupAutostart()
+    /// <summary>Есть ли задача автозапуска в планировщике (для галочки в меню).</summary>
+    private static bool AutostartTaskExists()
+    {
+        // schtasks /Query возвращает 0, если задача найдена, иначе ненулевой код
+        return RunHidden("schtasks.exe", $"/Query /TN \"{TaskName}\"") == 0;
+    }
+
+    /// <summary>Переключатель автозапуска: создаёт или удаляет задачу планировщика.</summary>
+    private void ToggleAutostart()
     {
         if (!IsAdmin())
         {
@@ -285,22 +300,29 @@ public sealed class TrayAppContext : ApplicationContext
                       "«Запуск от имени администратора» и повторите.");
             return;
         }
-        var exe = Environment.ProcessPath ?? Application.ExecutablePath;
-        var args = $"/Create /F /TN \"{TaskName}\" /TR \"\\\"{exe}\\\"\" /SC ONLOGON /RL HIGHEST /IT";
-        if (RunHidden("schtasks.exe", args) == 0)
-            _icon.ShowBalloonTip(4000, "VPNGuard",
-                "Готово: трей будет стартовать при входе в систему с правами администратора без UAC.",
-                ToolTipIcon.Info);
-        else
-            ShowError("Не удалось создать задачу планировщика.");
-    }
 
-    private void RemoveAutostart()
-    {
-        if (RunHidden("schtasks.exe", $"/Delete /F /TN \"{TaskName}\"") == 0)
-            _icon.ShowBalloonTip(3000, "VPNGuard", "Автозапуск убран.", ToolTipIcon.Info);
+        if (AutostartTaskExists())
+        {
+            if (RunHidden("schtasks.exe", $"/Delete /F /TN \"{TaskName}\"") == 0)
+            {
+                _miAutostart.Checked = false;
+                _icon.ShowBalloonTip(3000, "VPNGuard", "Автозапуск отключён.", ToolTipIcon.Info);
+            }
+            else ShowError("Не удалось удалить задачу автозапуска.");
+        }
         else
-            ShowError("Задача автозапуска не найдена или нет прав.");
+        {
+            var exe = Environment.ProcessPath ?? Application.ExecutablePath;
+            var args = $"/Create /F /TN \"{TaskName}\" /TR \"\\\"{exe}\\\"\" /SC ONLOGON /RL HIGHEST /IT";
+            if (RunHidden("schtasks.exe", args) == 0)
+            {
+                _miAutostart.Checked = true;
+                _icon.ShowBalloonTip(4000, "VPNGuard",
+                    "Готово: трей стартует при входе в систему с правами администратора без UAC.",
+                    ToolTipIcon.Info);
+            }
+            else ShowError("Не удалось создать задачу планировщика.");
+        }
     }
 
     private static int RunHidden(string file, string args)

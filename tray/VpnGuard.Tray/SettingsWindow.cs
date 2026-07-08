@@ -46,20 +46,15 @@ public sealed class SettingsWindow : Form
 
         var buttons = BuildButtonBar();
 
-        // корневая сетка: вкладки тянутся, кнопки — фиксированная строка снизу
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2,
-            Padding = new Padding(0),
-        };
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.Controls.Add(_tabs, 0, 0);
-        root.Controls.Add(buttons, 0, 1);
-
-        Controls.Add(root);
+        // Кнопки — отдельной панелью, пристёгнутой к низу формы (Dock.Bottom),
+        // а вкладки заполняют остаток (Dock.Fill). При таком раскладе кнопки
+        // гарантированно поверх и кликабельны. ВАЖЕН порядок добавления:
+        // при Dock последний добавленный control прижимается первым, поэтому
+        // сначала добавляем Fill-контрол, затем Bottom-панель... нет — наоборот:
+        // Dock.Fill должен добавляться ПОСЛЕ Dock.Bottom, иначе Fill заберёт всю
+        // площадь. Поэтому добавляем панель кнопок первой, вкладки — второй.
+        Controls.Add(buttons);   // Dock.Bottom — уйдёт вниз
+        Controls.Add(_tabs);     // Dock.Fill — займёт остаток над кнопками
     }
 
     // ------------------------------------------------------------------ вкладка «Киллсвитч»
@@ -279,23 +274,32 @@ public sealed class SettingsWindow : Form
 
     // ------------------------------------------------------------------ кнопки
 
-    private FlowLayoutPanel BuildButtonBar()
+    private Panel BuildButtonBar()
     {
-        var bar = new FlowLayoutPanel
+        // Внешняя панель прижата к низу и имеет достаточную высоту, чтобы
+        // кнопки всегда были видны и кликабельны на любом DPI.
+        var host = new Panel
         {
-            FlowDirection = FlowDirection.RightToLeft,
-            Dock = DockStyle.Fill,
-            AutoSize = true,
+            Dock = DockStyle.Bottom,
+            Height = 52,               // логические единицы; WinForms домножит на DPI
             Padding = new Padding(10, 8, 10, 8),
         };
-        var btnCancel = new Button { Text = "Отмена", AutoSize = true, DialogResult = DialogResult.Cancel, Margin = new Padding(6, 0, 0, 0) };
-        var btnSave = new Button { Text = "Сохранить и применить", AutoSize = true, DialogResult = DialogResult.OK };
-        btnSave.Click += (_, _) => Save();
+        var bar = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+        };
+        var btnCancel = new Button { Text = "Отмена", AutoSize = true, Margin = new Padding(6, 0, 0, 0) };
+        var btnSave = new Button { Text = "Сохранить и применить", AutoSize = true };
+        btnCancel.Click += (_, _) => Close();
+        btnSave.Click += (_, _) => { if (Save()) Close(); };
         bar.Controls.Add(btnCancel);
         bar.Controls.Add(btnSave);
-        AcceptButton = btnSave;
-        CancelButton = btnCancel;
-        return bar;
+        host.Controls.Add(bar);
+        AcceptButton = btnSave;   // Enter
+        CancelButton = btnCancel; // Esc
+        return host;
     }
 
     // ------------------------------------------------------------------ хелперы раскладки
@@ -335,7 +339,8 @@ public sealed class SettingsWindow : Form
 
     // ------------------------------------------------------------------ сохранение
 
-    private void Save()
+    /// <summary>Сохраняет конфиг и шлёт reload. true — успех (окно можно закрыть).</summary>
+    private bool Save()
     {
         try
         {
@@ -352,7 +357,8 @@ public sealed class SettingsWindow : Form
             _cfg.Killswitch.AppPolicy = _chkAllowlist.Checked ? "allowlist" : "all";
             _cfg.Killswitch.AllowedApps = _lstApps.Items.Cast<string>().ToList();
 
-            var oldByName = _cfg.Tunnels.ToDictionary(t => t.Name, t => t);
+            var oldByName = (_cfg.Tunnels ?? new List<TunnelEntry>())
+                .GroupBy(t => t.Name).ToDictionary(g => g.Key, g => g.First());
             var list = new List<TunnelEntry>();
             foreach (DataGridViewRow row in _grid.Rows)
             {
@@ -383,13 +389,18 @@ public sealed class SettingsWindow : Form
 
             var r = PipeClient.Send(new PipeRequest { Cmd = "reload" });
             if (!r.Ok)
-                MessageBox.Show("Конфиг сохранён, но служба не ответила: " + r.Error,
+            {
+                MessageBox.Show("Конфиг сохранён на диск, но служба не подтвердила перезагрузку:\n" + r.Error +
+                    "\n\nПроверьте, запущена ли служба VPNGuard.",
                     "VPNGuard", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return true; // на диск записано — окно закрываем
+            }
+            return true;
         }
         catch (Exception ex)
         {
             TrayAppContext.ShowError("Ошибка сохранения: " + ex.Message);
-            DialogResult = DialogResult.None; // не закрывать окно при ошибке
+            return false; // не закрываем окно, чтобы пользователь не потерял правки
         }
     }
 }
