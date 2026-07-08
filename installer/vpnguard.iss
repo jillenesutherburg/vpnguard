@@ -60,17 +60,12 @@ Filename: "notepad.exe"; Parameters: """{commonappdata}\VPNGuard\config.yaml""";
 ; 3. Служба (переустановка начисто; ошибки uninstall на чистой машине игнорируются)
 Filename: "{app}\vpnguard.exe"; Parameters: "service uninstall"; \
   StatusMsg: "Удаление старой службы..."; Flags: runhidden waituntilterminated
+
+; 4. Установка службы + автозапуск трея (schtasks вынесен в [Code]
+;    AfterInstall, чтобы не воевать с кавычками Inno Setup).
 Filename: "{app}\vpnguard.exe"; Parameters: "service install"; \
-  StatusMsg: "Установка и запуск службы VPNGuard..."; Flags: runhidden waituntilterminated
-
-; 4. Автозапуск трея с наивысшими правами БЕЗ UAC (механизм OpenVPN GUI)
-Filename: "schtasks.exe"; \
-  Parameters: '/Create /F /TN "VPNGuard Tray" /TR "\"{app}\VpnGuard.Tray.exe\"" /SC ONLOGON /RL HIGHEST /IT'; \
-  StatusMsg: "Настройка автозапуска трея..."; Flags: runhidden waituntilterminated
-
-; 5. Стартуем трей сразу (через задачу — уже с нужными правами)
-Filename: "schtasks.exe"; Parameters: '/Run /TN "VPNGuard Tray"'; \
-  Tasks: starttray; Flags: runhidden waituntilterminated
+  StatusMsg: "Установка и запуск службы VPNGuard..."; Flags: runhidden waituntilterminated; \
+  AfterInstall: SetupTrayAutostart
 
 [UninstallRun]
 ; Порядок важен: трей -> задача -> служба -> panic (открыть сеть)
@@ -84,6 +79,31 @@ Filename: "{app}\vpnguard.exe"; Parameters: "panic"; \
   RunOnceId: "Panic"; Flags: runhidden waituntilterminated
 
 [Code]
+const
+  TrayTaskName = 'VPNGuard Tray';
+
+// Создаёт задачу планировщика: трей стартует при входе с наивысшими
+// правами и БЕЗ запроса UAC (тот же механизм, что у OpenVPN GUI).
+// Затем, если выбрана задача starttray, запускает трей сразу.
+// Кавычки в Pascal-строке экранируются удвоением ('') — путь к exe
+// заворачивается в двойные кавычки безопасно, без \"-костылей [Run].
+procedure SetupTrayAutostart;
+var
+  RC: Integer;
+  TrayExe, CreateParams: String;
+begin
+  TrayExe := ExpandConstant('{app}\VpnGuard.Tray.exe');
+  CreateParams :=
+    '/Create /F /TN "' + TrayTaskName + '" ' +
+    '/TR "\"' + TrayExe + '\"" ' +
+    '/SC ONLOGON /RL HIGHEST /IT';
+  Exec('schtasks.exe', CreateParams, '', SW_HIDE, ewWaitUntilTerminated, RC);
+
+  if WizardIsTaskSelected('starttray') then
+    Exec('schtasks.exe', '/Run /TN "' + TrayTaskName + '"', '',
+      SW_HIDE, ewWaitUntilTerminated, RC);
+end;
+
 // Перед копированием файлов гасим то, что может их держать (обновление).
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
