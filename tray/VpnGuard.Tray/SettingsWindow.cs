@@ -247,7 +247,7 @@ public sealed class SettingsWindow : Form
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Скрипт (.bat/.exe)", Name = "script", FillWeight = 40 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Пауза, с", Name = "rdelay", FillWeight = 12 });
         _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Health-check host:port", Name = "check", FillWeight = 26 });
-        foreach (var t in _cfg.Tunnels)
+        foreach (var t in _cfg.Tunnels ?? new List<TunnelEntry>())
             _grid.Rows.Add(t.Autostart ?? true, t.Name, t.Script, t.RestartDelaySeconds, t.Check?.Target ?? "");
         grid.Controls.Add(_grid, 0, 0);
 

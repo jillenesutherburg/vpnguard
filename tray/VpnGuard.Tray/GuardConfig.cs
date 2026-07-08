@@ -39,9 +39,36 @@ public sealed class GuardConfig
 
     public static GuardConfig Load()
     {
+        GuardConfig cfg;
         if (!File.Exists(ConfigPath))
-            return new GuardConfig(); // служба создаст пример через `vpnguard init`
-        return Reader.Deserialize<GuardConfig>(File.ReadAllText(ConfigPath)) ?? new GuardConfig();
+            cfg = new GuardConfig(); // служба создаст пример через `vpnguard init`
+        else
+            cfg = Reader.Deserialize<GuardConfig>(File.ReadAllText(ConfigPath)) ?? new GuardConfig();
+
+        cfg.Normalize();
+        return cfg;
+    }
+
+    /// <summary>
+    /// YamlDotNet оставляет отсутствующие в YAML секции и коллекции равными null.
+    /// Приводим всё к безопасным значениям, чтобы формы могли перебирать списки
+    /// без проверок на null (иначе foreach по null → NullReferenceException).
+    /// </summary>
+    private void Normalize()
+    {
+        Killswitch ??= new KillswitchSection();
+        Openvpn ??= new OpenVpnSection();
+        Killswitch.AllowedApps ??= new List<string>();
+        Killswitch.TunnelInterfaces ??= new List<string>();
+        if (Killswitch.TunnelInterfaces.Count == 0)
+            Killswitch.TunnelInterfaces = new List<string> { "OpenVPN", "TAP", "Wintun" };
+        if (string.IsNullOrWhiteSpace(Killswitch.DnsWhenDown))
+            Killswitch.DnsWhenDown = "svchost";
+        if (string.IsNullOrWhiteSpace(Killswitch.AppPolicy))
+            Killswitch.AppPolicy = "all";
+        Tunnels ??= new List<TunnelEntry>();
+        foreach (var t in Tunnels)
+            t.Args ??= new List<string>();
     }
 
     public void Save()
