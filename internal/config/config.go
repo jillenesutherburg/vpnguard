@@ -133,6 +133,12 @@ type Killswitch struct {
 	AppPolicy string `yaml:"app_policy"`
 	// AllowedApps: absolute .exe paths, used when AppPolicy == allowlist.
 	AllowedApps []string `yaml:"allowed_apps"`
+	// LockEndpointToApp: restrict the VPN-server permit to openvpn.exe by
+	// app-id. Default false — the permit is IP:port/proto only. Enable ONLY
+	// if you are sure the exact binary path connects to the server; a
+	// mismatch (OpenVPN-as-service, GUI+service, child process) silently
+	// blocks reconnect. Leave false and the VPN just connects.
+	LockEndpointToApp bool `yaml:"lock_endpoint_to_app"`
 	// TunnelInterfaces: case-insensitive substrings matched against
 	// adapter friendly names, e.g. ["OpenVPN", "TAP", "Wintun"].
 	TunnelInterfaces []string `yaml:"tunnel_interfaces"`
@@ -197,6 +203,12 @@ const exampleYAML = `killswitch:
   app_policy: all            # all | allowlist
   allowed_apps: []           # used when app_policy: allowlist
   #  - 'C:\Windows\System32\OpenSSH\ssh.exe'
+  # Привязывать разрешение к VPN-серверу к конкретному openvpn.exe (app-id).
+  # false (по умолчанию) = разрешение по IP:порт:протокол сервера, без
+  # привязки к процессу — так VPN подключается при любой схеме запуска
+  # OpenVPN (служба, GUI+служба, дочерний процесс). true = строже, но при
+  # несовпадении пути к exe реконнект будет молча заблокирован.
+  lock_endpoint_to_app: false
   tunnel_interfaces: ["OpenVPN", "TAP", "Wintun"]
 
 openvpn:

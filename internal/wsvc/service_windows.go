@@ -285,12 +285,13 @@ func BuildKillswitchConfig(cfg *config.File, extra []killswitch.Endpoint) (*kill
 		log.Printf("build: ВНИМАНИЕ! endpoints пуст — OpenVPN НЕ сможет подключиться при активном киллсвитче")
 	}
 	return &killswitch.Config{
-		AllowLAN:     cfg.Killswitch.AllowLAN,
-		DNSWhenDown:  cfg.Killswitch.DNSWhenDown,
-		VPNEndpoints: eps,
-		VPNBinary:    cfg.OpenVPN.Binary,
-		AppPolicy:    cfg.Killswitch.AppPolicy,
-		AllowedApps:  cfg.Killswitch.AllowedApps,
+		AllowLAN:          cfg.Killswitch.AllowLAN,
+		DNSWhenDown:       cfg.Killswitch.DNSWhenDown,
+		VPNEndpoints:      eps,
+		VPNBinary:         cfg.OpenVPN.Binary,
+		LockEndpointToApp: cfg.Killswitch.LockEndpointToApp,
+		AppPolicy:         cfg.Killswitch.AppPolicy,
+		AllowedApps:       cfg.Killswitch.AllowedApps,
 	}, nil
 }
 

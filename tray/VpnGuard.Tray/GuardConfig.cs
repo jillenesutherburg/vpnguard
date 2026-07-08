@@ -74,6 +74,10 @@ public sealed class KillswitchSection
     [YamlMember(Alias = "allowed_apps")]
     public List<string> AllowedApps { get; set; } = new();
 
+    /// <summary>Привязывать permit VPN-сервера к openvpn.exe (app-id). По умолчанию false — надёжнее для коннекта.</summary>
+    [YamlMember(Alias = "lock_endpoint_to_app")]
+    public bool LockEndpointToApp { get; set; }
+
     [YamlMember(Alias = "tunnel_interfaces")]
     public List<string> TunnelInterfaces { get; set; } = new() { "OpenVPN", "TAP", "Wintun" };
 }

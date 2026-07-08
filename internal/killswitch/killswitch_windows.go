@@ -57,6 +57,16 @@ type Config struct {
 	// executable only (e.g. openvpn.exe). Strongly recommended.
 	VPNBinary string
 
+	// LockEndpointToApp: when true AND VPNBinary is set, the permit rule for
+	// the VPN server is additionally restricted to VPNBinary via app-id.
+	// Default false: the server permit is IP:port/proto only. This matters
+	// because the process that actually connects to the server may differ
+	// from VPNBinary (OpenVPN installed as a service, GUI+service mode,
+	// child processes) — an app-id mismatch there silently blocks the
+	// reconnect. The permit is already narrow (single server IP + port), so
+	// dropping the app-id condition is a safe default that "just connects".
+	LockEndpointToApp bool
+
 	// TunnelLUIDs are interface LUIDs of active VPN tunnel adapters.
 	// Traffic on these interfaces is permitted.
 	TunnelLUIDs []uint64
@@ -336,8 +346,9 @@ func buildRules(cfg *Config, persistent bool) ([]*wf.Rule, error) {
 			{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypeEqual, Value: ep.Addr},
 			{Field: wf.FieldIPRemotePort, Op: wf.MatchTypeEqual, Value: ep.Port},
 		}
-		if vpnAppID != "" {
+		if vpnAppID != "" && cfg.LockEndpointToApp {
 			conds = append(conds, &wf.Match{Field: wf.FieldALEAppID, Op: wf.MatchTypeEqual, Value: vpnAppID})
+			log.Printf("killswitch:   (endpoint %s привязан к app-id %s)", ep.Addr, cfg.VPNBinary)
 		}
 		add("permit VPN endpoint "+ep.Addr.String(), layer, wf.ActionPermit, weightPermit, conds...)
 	}
