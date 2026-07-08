@@ -1,2 +1,4 @@
 vpnguard.exe
 *.log
+installer/payload/
+installer/output/

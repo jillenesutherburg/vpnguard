@@ -21,21 +21,22 @@ Filtering Platform (WFP) + супервизор ssh-туннелей (этап 3
   разрешение привязано к интерфейсу. Никакой гонки «заметили падение →
   успели заблокировать»: блок стоит всегда.
 
-## Быстрый старт
+## Установка
 
-```
-# 1. собрать (или взять vpnguard.exe из GitHub Releases)
-go build -o vpnguard.exe ./cmd/vpnguard
+Скачай `VPNGuard-Setup-vX.Y.Z.exe` из [Releases](../../releases) и запусти.
+Инсталлер сам: создаст конфиг, откроет его в блокноте (укажи пути к
+`openvpn.exe` и своему `.ovpn`, сохрани, закрой блокнот), установит и
+запустит службу, настроит автозапуск трея с правами администратора без
+UAC и покажет иконку в трее. Всё — дальше просто пользуйся OpenVPN GUI
+как обычно.
 
-# 2. от администратора:
-vpnguard init                        # создаст C:\ProgramData\VPNGuard\config.yaml
-notepad C:\ProgramData\VPNGuard\config.yaml   # указать пути к .ovpn и openvpn.exe
-vpnguard interfaces                  # посмотреть имена адаптеров (для tunnel_interfaces)
-vpnguard service install             # установить и запустить службу
+Обновление — запустить новый Setup поверх (конфиг не трогается).
+Удаление — стандартно через «Приложения»: деинсталлятор останавливает
+службу и **снимает все фильтры из WFP**, сеть остаётся открытой.
 
-# проверка
-vpnguard status
-```
+Для тех, кто не любит инсталлеры, в релизах лежит
+`VPNGuard-portable-win-x64-*.zip` — ручная установка описана в
+docs/TEST-PLAN.md (vpnguard init → config → vpnguard service install).
 
 ## ⚠️ Аварийный выход
 
