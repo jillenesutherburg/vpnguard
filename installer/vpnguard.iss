@@ -71,7 +71,7 @@ Filename: "{app}\vpnguard.exe"; Parameters: "service install"; \
 ; Порядок важен: трей -> задача -> служба -> panic (открыть сеть)
 Filename: "taskkill.exe"; Parameters: "/IM VpnGuard.Tray.exe /F"; \
   RunOnceId: "KillTray"; Flags: runhidden waituntilterminated
-Filename: "schtasks.exe"; Parameters: '/Delete /F /TN "VPNGuard Tray"'; \
+Filename: "schtasks.exe"; Parameters: "/Delete /F /TN ""VPNGuard Tray"""; \
   RunOnceId: "DelTask"; Flags: runhidden waituntilterminated
 Filename: "{app}\vpnguard.exe"; Parameters: "service uninstall"; \
   RunOnceId: "DelSvc"; Flags: runhidden waituntilterminated
