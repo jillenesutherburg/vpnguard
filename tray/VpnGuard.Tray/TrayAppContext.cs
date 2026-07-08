@@ -50,9 +50,9 @@ public sealed class TrayAppContext : ApplicationContext
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_miToggle);
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add(new ToolStripMenuItem("Разрешённые приложения...", null, (_, _) => new AllowedAppsForm().ShowDialog()));
-        menu.Items.Add(new ToolStripMenuItem("Туннели...", null, (_, _) => new TunnelsForm().ShowDialog()));
-        menu.Items.Add(new ToolStripMenuItem("Настройки...", null, (_, _) => new SettingsForm().ShowDialog()));
+        menu.Items.Add(new ToolStripMenuItem("Настройки…", null, (_, _) => ShowSettings(0)));
+        menu.Items.Add(new ToolStripMenuItem("Разрешённые приложения…", null, (_, _) => ShowSettings(1)));
+        menu.Items.Add(new ToolStripMenuItem("Туннели…", null, (_, _) => ShowSettings(2)));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Открыть конфиг (YAML)", null, (_, _) => OpenInNotepad(GuardConfig.ConfigPath)));
         menu.Items.Add(new ToolStripMenuItem("Открыть лог службы", null, (_, _) => OpenInNotepad(GuardConfig.LogPath)));
@@ -71,7 +71,7 @@ public sealed class TrayAppContext : ApplicationContext
             Visible = true,
             ContextMenuStrip = menu,
         };
-        _icon.DoubleClick += (_, _) => new SettingsForm().ShowDialog();
+        _icon.DoubleClick += (_, _) => ShowSettings(0);
 
         if (!IsAdmin())
         {
@@ -85,6 +85,27 @@ public sealed class TrayAppContext : ApplicationContext
         _timer.Tick += (_, _) => Refresh();
         _timer.Start();
         Refresh();
+    }
+
+    // ------------------------------------------------------------------ окно настроек
+
+    private SettingsWindow? _settings;
+
+    /// <summary>Открывает единое окно настроек на заданной вкладке (0=Киллсвитч,1=Приложения,2=Туннели).
+    /// Если окно уже открыто — просто выводит его на передний план и переключает вкладку.</summary>
+    private void ShowSettings(int tabIndex)
+    {
+        if (_settings is { IsDisposed: false })
+        {
+            _settings.SelectTab(tabIndex);
+            _settings.Activate();
+            return;
+        }
+        _settings = new SettingsWindow();
+        _settings.SelectTab(tabIndex);
+        _settings.FormClosed += (_, _) => _settings = null;
+        _settings.Show();
+        _settings.Activate();
     }
 
     // ------------------------------------------------------------------ статус

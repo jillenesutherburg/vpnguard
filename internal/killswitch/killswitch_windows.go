@@ -430,20 +430,55 @@ func buildRules(cfg *Config, persistent bool) ([]*wf.Rule, error) {
 					&wf.Match{Field: wf.FieldIPLocalInterface, Op: wf.MatchTypeEqual, Value: luid})
 			}
 		}
-		// Inbound over the tunnel (needed for reverse tunnels / p2p).
-		for _, l := range inLayers {
-			add("permit tunnel in", l, wf.ActionPermit, weightPermit,
-				&wf.Match{Field: wf.FieldIPLocalInterface, Op: wf.MatchTypeEqual, Value: luid})
+		// Inbound over the tunnel.
+		if cfg.AppPolicy == "allowlist" {
+			// Строгий белый список: входящие через туннель — только
+			// разрешённым приложениям (для reverse-туннелей/p2p этих же app).
+			for _, app := range cfg.AllowedApps {
+				appID, err := wf.AppID(app)
+				if err != nil {
+					return nil, fmt.Errorf("resolve AppID for %q: %w", app, err)
+				}
+				for _, l := range inLayers {
+					add("permit app inbound via tunnel: "+app, l, wf.ActionPermit, weightPermit,
+						&wf.Match{Field: wf.FieldIPLocalInterface, Op: wf.MatchTypeEqual, Value: luid},
+						&wf.Match{Field: wf.FieldALEAppID, Op: wf.MatchTypeEqual, Value: appID})
+				}
+			}
+		} else {
+			for _, l := range inLayers {
+				add("permit tunnel in", l, wf.ActionPermit, weightPermit,
+					&wf.Match{Field: wf.FieldIPLocalInterface, Op: wf.MatchTypeEqual, Value: luid})
+			}
 		}
 	}
 
 	// 8. Optional LAN.
 	if cfg.AllowLAN {
-		for _, pfx := range lanV4 {
-			add("permit LAN out "+pfx.String(), wf.LayerALEAuthConnectV4, wf.ActionPermit, weightPermit,
-				&wf.Match{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypePrefix, Value: pfx})
-			add("permit LAN in "+pfx.String(), wf.LayerALEAuthRecvAcceptV4, wf.ActionPermit, weightPermit,
-				&wf.Match{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypePrefix, Value: pfx})
+		if cfg.AppPolicy == "allowlist" {
+			// В строгом белом списке LAN разрешаем тоже только приложениям
+			// из списка — иначе любой процесс уходит в локалку мимо политики.
+			for _, app := range cfg.AllowedApps {
+				appID, err := wf.AppID(app)
+				if err != nil {
+					return nil, fmt.Errorf("resolve AppID for %q: %w", app, err)
+				}
+				for _, pfx := range lanV4 {
+					add("permit LAN out "+pfx.String()+" ("+filepath.Base(app)+")", wf.LayerALEAuthConnectV4, wf.ActionPermit, weightPermit,
+						&wf.Match{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypePrefix, Value: pfx},
+						&wf.Match{Field: wf.FieldALEAppID, Op: wf.MatchTypeEqual, Value: appID})
+					add("permit LAN in "+pfx.String()+" ("+filepath.Base(app)+")", wf.LayerALEAuthRecvAcceptV4, wf.ActionPermit, weightPermit,
+						&wf.Match{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypePrefix, Value: pfx},
+						&wf.Match{Field: wf.FieldALEAppID, Op: wf.MatchTypeEqual, Value: appID})
+				}
+			}
+		} else {
+			for _, pfx := range lanV4 {
+				add("permit LAN out "+pfx.String(), wf.LayerALEAuthConnectV4, wf.ActionPermit, weightPermit,
+					&wf.Match{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypePrefix, Value: pfx})
+				add("permit LAN in "+pfx.String(), wf.LayerALEAuthRecvAcceptV4, wf.ActionPermit, weightPermit,
+					&wf.Match{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypePrefix, Value: pfx})
+			}
 		}
 	}
 
