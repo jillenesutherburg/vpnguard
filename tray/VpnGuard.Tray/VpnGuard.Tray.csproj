@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>VpnGuard.Tray</RootNamespace>
+    <AssemblyName>VpnGuard.Tray</AssemblyName>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Конфиг Go-службы — YAML (C:\ProgramData\VPNGuard\config.yaml) -->
+    <PackageReference Include="YamlDotNet" Version="15.1.2" />
+  </ItemGroup>
+
+</Project>
