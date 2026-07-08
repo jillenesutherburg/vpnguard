@@ -13,6 +13,13 @@
   #define MyAppVersion "0.0.0-dev"
 #endif
 
+; /DLite=1 — сборка, где трей framework-dependent (нужен .NET 8 Desktop Runtime).
+#ifdef Lite
+  #define OutputSuffix "-lite"
+#else
+  #define OutputSuffix ""
+#endif
+
 [Setup]
 AppId={{9D4E7C52-1A6B-4F3E-8C2D-5E9A0B1C2D3E}
 AppName=VPNGuard
@@ -22,7 +29,7 @@ DefaultDirName={autopf}\VPNGuard
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
 OutputDir=output
-OutputBaseFilename=VPNGuard-Setup-{#MyAppVersion}
+OutputBaseFilename=VPNGuard-Setup-{#MyAppVersion}{#OutputSuffix}
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -114,6 +121,44 @@ begin
   Sleep(1500);
   Result := '';
 end;
+
+#ifdef Lite
+// Lite-сборка требует .NET 8 Desktop Runtime. Проверяем и предлагаем
+// скачать, если его нет (полная сборка эту проверку не включает).
+function DotNetDesktop8Present: Boolean;
+var
+  RC: Integer;
+begin
+  // `dotnet --list-runtimes` вернёт строки Microsoft.WindowsDesktop.App 8.x
+  Result := Exec('cmd.exe',
+    '/c dotnet --list-runtimes | findstr /C:"Microsoft.WindowsDesktop.App 8."',
+    '', SW_HIDE, ewWaitUntilTerminated, RC) and (RC = 0);
+end;
+
+function InitializeSetup(): Boolean;
+var
+  RC: Integer;
+begin
+  Result := True;
+  if not DotNetDesktop8Present then
+  begin
+    if MsgBox(
+      'Это ОБЛЕГЧЁННАЯ версия VPNGuard — ей нужен .NET 8 Desktop Runtime,' + #13#10 +
+      'который на этом компьютере не найден.' + #13#10 + #13#10 +
+      'Открыть страницу загрузки? (нужен "Desktop Runtime x64")' + #13#10 +
+      'После установки .NET запустите этот инсталлятор снова.' + #13#10 + #13#10 +
+      'Либо используйте полную версию VPNGuard-Setup (без -lite) — ей .NET не нужен.',
+      mbConfirmation, MB_YESNO) = IDYES then
+    begin
+      ShellExec('open',
+        'https://dotnet.microsoft.com/download/dotnet/8.0/runtime?cid=getdotnetcore',
+        '', '', SW_SHOW, ewNoWait, RC);
+    end;
+    Result := False; // не продолжаем без рантайма
+  end;
+end;
+#endif
+
 
 // Отметить "править конфиг" по умолчанию только при первой установке:
 // при обновлении конфиг уже настроен, блокнот не нужен.

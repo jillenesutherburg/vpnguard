@@ -15,6 +15,7 @@ package killswitch
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"os"
@@ -102,6 +103,15 @@ func (m *Manager) Close() error { return m.session.Close() }
 // deleted after. Safe to call repeatedly; used for both initial enable
 // and reconfiguration (e.g. tunnel adapter appeared/disappeared).
 func (m *Manager) Apply(cfg *Config) error {
+	log.Printf("killswitch: Apply начат — persistent=%v allowLan=%v dnsWhenDown=%s appPolicy=%s tunnelLUIDs=%v endpoints=%d allowedApps=%d",
+		m.persistent, cfg.AllowLAN, cfg.DNSWhenDown, cfg.AppPolicy, cfg.TunnelLUIDs, len(cfg.VPNEndpoints), len(cfg.AllowedApps))
+	for i, ep := range cfg.VPNEndpoints {
+		log.Printf("killswitch:   endpoint[%d] = %s:%d/%v (сервер VPN, разрешён вне туннеля)", i, ep.Addr, ep.Port, protoName(ep.Proto))
+	}
+	if cfg.VPNBinary != "" {
+		log.Printf("killswitch:   VPN-клиент (app-id): %s", cfg.VPNBinary)
+	}
+
 	if err := m.ensureFoundation(); err != nil {
 		return err
 	}
@@ -109,20 +119,26 @@ func (m *Manager) Apply(cfg *Config) error {
 	if err != nil {
 		return err
 	}
+	log.Printf("killswitch: существующих наших правил в WFP: %d (будут заменены)", len(oldIDs))
+
 	rules, err := buildRules(cfg, m.persistent)
 	if err != nil {
 		return err
 	}
+	log.Printf("killswitch: сгенерировано правил: %d — добавляю (make-before-break)", len(rules))
 	for _, r := range rules {
 		if err := m.session.AddRule(r); err != nil {
 			return fmt.Errorf("add rule %q: %w", r.Name, err)
 		}
+		log.Printf("killswitch:   + %s", ruleSummary(r))
 	}
 	for _, id := range oldIDs {
 		if err := m.session.DeleteRule(id); err != nil {
 			return fmt.Errorf("delete stale rule: %w", err)
 		}
 	}
+	log.Printf("killswitch: удалено старых правил: %d. Apply завершён, активно правил: %d",
+		len(oldIDs), len(rules))
 	return nil
 }
 
@@ -132,6 +148,7 @@ func (m *Manager) Disable() error {
 	if err != nil {
 		return err
 	}
+	log.Printf("killswitch: Disable/panic — снимаю %d правил + sublayer + provider (сеть будет открыта)", len(ids))
 	var firstErr error
 	for _, id := range ids {
 		if err := m.session.DeleteRule(id); err != nil && firstErr == nil {
@@ -143,6 +160,11 @@ func (m *Manager) Disable() error {
 	}
 	if err := m.session.DeleteProvider(providerID); err != nil && !isNotFound(err) && firstErr == nil {
 		firstErr = err
+	}
+	if firstErr != nil {
+		log.Printf("killswitch: Disable завершён с ошибкой: %v", firstErr)
+	} else {
+		log.Printf("killswitch: Disable завершён, все объекты VPNGuard сняты")
 	}
 	return firstErr
 }
@@ -170,6 +192,7 @@ func (m *Manager) ensureFoundation() error {
 		}
 	}
 	if !haveProv {
+		log.Printf("killswitch: создаю Provider VPNGuard (первый запуск)")
 		if err := m.session.AddProvider(&wf.Provider{
 			ID:          providerID,
 			Name:        "VPNGuard",
@@ -184,6 +207,7 @@ func (m *Manager) ensureFoundation() error {
 		return err
 	}
 	if len(subs) == 0 {
+		log.Printf("killswitch: создаю Sublayer (weight=0xFFFF, наши правила приоритетнее чужих)")
 		if err := m.session.AddSublayer(&wf.Sublayer{
 			ID:          sublayerID,
 			Name:        "VPNGuard kill switch",
@@ -516,4 +540,43 @@ func ListInterfaces() (string, error) {
 		fmt.Fprintf(&b, "idx=%-3d luid=%-20d state=%-4s name=%q\n", ifc.Index, luid, state, ifc.Name)
 	}
 	return b.String(), nil
+}
+
+// ---- logging helpers ---------------------------------------------------
+
+func protoName(p wf.IPProto) string {
+	switch p {
+	case wf.IPProtoTCP:
+		return "tcp"
+	case wf.IPProtoUDP:
+		return "udp"
+	default:
+		return fmt.Sprintf("proto#%d", uint8(p))
+	}
+}
+
+// ruleSummary renders a rule for the log: action + name + layer.
+func ruleSummary(r *wf.Rule) string {
+	action := "PERMIT"
+	if r.Action == wf.ActionBlock {
+		action = "BLOCK "
+	}
+	return fmt.Sprintf("%s w=%-3d %-24s [%s, conds=%d]",
+		action, r.Weight, strings.TrimPrefix(r.Name, "VPNGuard: "),
+		layerName(r.Layer), len(r.Conditions))
+}
+
+func layerName(l wf.LayerID) string {
+	switch l {
+	case wf.LayerALEAuthConnectV4:
+		return "out-v4"
+	case wf.LayerALEAuthConnectV6:
+		return "out-v6"
+	case wf.LayerALEAuthRecvAcceptV4:
+		return "in-v4"
+	case wf.LayerALEAuthRecvAcceptV6:
+		return "in-v6"
+	default:
+		return "layer?"
+	}
 }

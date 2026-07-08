@@ -162,8 +162,12 @@ func (m *Manager) stopLocked(t *tunnel) {
 
 func (t *tunnel) setState(s State, detail string) {
 	t.mu.Lock()
+	old := t.state
 	t.state, t.detail = s, detail
 	t.mu.Unlock()
+	if old != s {
+		log.Printf("[%s] состояние: %s -> %s (%s)", t.cfg.Name, old, s, detail)
+	}
 }
 
 func (m *Manager) supervise(ctx context.Context, t *tunnel) {

@@ -58,17 +58,29 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
-      - name: Publish tray (win-x64, self-contained, single file)
+      - name: Publish tray — self-contained (64 MB, ни от чего не зависит)
         run: >
           dotnet publish tray/VpnGuard.Tray/VpnGuard.Tray.csproj
           -c Release -r win-x64 --self-contained true
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
-          -o publish-tray
+          -o publish-tray-full
+
+      - name: Publish tray — lite (~1 MB, нужен .NET 8 Desktop Runtime)
+        run: >
+          dotnet publish tray/VpnGuard.Tray/VpnGuard.Tray.csproj
+          -c Release -r win-x64 --self-contained false
+          -p:PublishSingleFile=true
+          -o publish-tray-lite
 
       - uses: actions/upload-artifact@v4
         with:
           name: vpnguard-tray-windows-x64
-          path: publish-tray/VpnGuard.Tray.exe
+          path: publish-tray-full/VpnGuard.Tray.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vpnguard-tray-windows-x64-lite
+          path: publish-tray-lite/VpnGuard.Tray.exe
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -87,14 +99,14 @@ jobs:
           name: vpnguard-tray-windows-x64
           path: installer/payload
 
-      - name: Build installer (Inno Setup)
+      - name: Build FULL installer (self-contained, ни от чего не зависит)
         shell: pwsh
         run: |
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
             /DMyAppVersion=$env:GITHUB_REF_NAME `
             installer\vpnguard.iss
 
-      - name: Portable zip (для тех, кто не любит инсталлеры)
+      - name: Portable FULL zip
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force pkg | Out-Null
@@ -102,9 +114,32 @@ jobs:
           Copy-Item README.md pkg/
           Compress-Archive -Path pkg/* -DestinationPath "VPNGuard-portable-win-x64-$env:GITHUB_REF_NAME.zip"
 
+      # ---- LITE: тот же набор, но трей — framework-dependent (~1 МБ) ----
+      - uses: actions/download-artifact@v4
+        with:
+          name: vpnguard-tray-windows-x64-lite
+          path: installer/payload   # перезаписываем трей на lite-версию
+
+      - name: Build LITE installer (нужен .NET 8 Desktop Runtime)
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            /DMyAppVersion="$env:GITHUB_REF_NAME-lite" `
+            /DLite=1 `
+            installer\vpnguard.iss
+
+      - name: Portable LITE zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force pkg-lite | Out-Null
+          Copy-Item installer/payload/* pkg-lite/
+          Copy-Item README.md pkg-lite/
+          Compress-Archive -Path pkg-lite/* -DestinationPath "VPNGuard-portable-lite-win-x64-$env:GITHUB_REF_NAME.zip"
+
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             installer/output/VPNGuard-Setup-*.exe
             VPNGuard-portable-win-x64-*.zip
+            VPNGuard-portable-lite-win-x64-*.zip
           generate_release_notes: true

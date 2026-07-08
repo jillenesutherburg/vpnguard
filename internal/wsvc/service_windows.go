@@ -11,6 +11,7 @@ package wsvc
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"slices"
@@ -135,6 +136,7 @@ func runLoop(stop <-chan struct{}) error {
 func (s *svcState) onVPNChange(st vpnmon.Status) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	log.Printf("событие VPN: connected=%v adapters=%v luids=%v", st.Connected, st.Adapters, st.LUIDs())
 	s.last = st
 	s.reconcileLocked()
 }
@@ -172,6 +174,7 @@ func (s *svcState) reconcileLocked() {
 func (s *svcState) handleIPC(req ipc.Request) ipc.Response {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	log.Printf("IPC команда: %s%s", req.Cmd, argSuffix(req.Arg))
 	switch req.Cmd {
 	case "ping":
 		return ipc.Success("pong")
@@ -259,6 +262,7 @@ func (s *svcState) statusLocked() ipc.ServiceStatus {
 // BuildKillswitchConfig converts the YAML config into the killswitch
 // runtime config. Extra endpoints (e.g. from CLI) can be injected.
 func BuildKillswitchConfig(cfg *config.File, extra []killswitch.Endpoint) (*killswitch.Config, error) {
+	log.Printf("build: парсю .ovpn: %s", cfg.OpenVPN.Config)
 	remotes, err := config.ParseOVPN(cfg.OpenVPN.Config)
 	if err != nil {
 		return nil, fmt.Errorf("parse ovpn: %w", err)
@@ -271,9 +275,14 @@ func BuildKillswitchConfig(cfg *config.File, extra []killswitch.Endpoint) (*kill
 	for _, r := range resolved {
 		ep, err := killswitch.EndpointFrom(r.IP, r.Port, r.Proto)
 		if err != nil {
+			log.Printf("build: ПРОПУСКАЮ endpoint %s:%d/%s — %v", r.IP, r.Port, r.Proto, err)
 			return nil, err
 		}
 		eps = append(eps, ep)
+	}
+	log.Printf("build: итоговых VPN-endpoints для permit-правил: %d (из них extra=%d)", len(eps), len(extra))
+	if len(eps) == 0 {
+		log.Printf("build: ВНИМАНИЕ! endpoints пуст — OpenVPN НЕ сможет подключиться при активном киллсвитче")
 	}
 	return &killswitch.Config{
 		AllowLAN:     cfg.Killswitch.AllowLAN,
@@ -291,12 +300,22 @@ func setupLog() {
 	if fi, err := os.Stat(config.LogPath()); err == nil && fi.Size() > 5*1024*1024 {
 		_ = os.Rename(config.LogPath(), config.LogPath()+".old")
 	}
-	f, err := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err == nil {
-		log.SetOutput(f)
-	}
 	log.SetFlags(log.LstdFlags | log.Lmsgprefix)
 	log.SetPrefix("[vpnguard] ")
+
+	f, err := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err == nil {
+		// пишем И в файл, И в stderr — чтобы `service run` показывал всё в консоли
+		log.SetOutput(io.MultiWriter(f, os.Stderr))
+	} else {
+		log.SetOutput(os.Stderr)
+		log.Printf("не смог открыть лог-файл %s: %v (пишу только в консоль)", config.LogPath(), err)
+	}
+	log.Printf("=== VPNGuard старт ===")
+	log.Printf("рабочая директория (config/log/cache): %s", config.Dir)
+	log.Printf("конфиг: %s", config.Path())
+	log.Printf("лог:    %s", config.LogPath())
+	log.Printf("кэш:    %s", config.CachePath())
 }
 
 // ---- install / uninstall ----------------------------------------------
@@ -350,4 +369,11 @@ func Uninstall() error {
 	_, _ = s.Control(svc.Stop)
 	time.Sleep(2 * time.Second)
 	return s.Delete()
+}
+
+func argSuffix(arg string) string {
+	if arg == "" {
+		return ""
+	}
+	return " arg=" + arg
 }

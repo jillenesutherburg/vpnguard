@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/netip"
 	"os"
@@ -18,8 +19,36 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Dir is the state directory. Created on demand.
-var Dir = filepath.Join(os.Getenv("ProgramData"), "VPNGuard")
+// Dir is the state directory: by default the folder next to the executable
+// (portable mode), so config/log/cache travel with the binary. If that
+// folder is not writable (e.g. installed under Program Files), we fall back
+// to %ProgramData%\VPNGuard. Override explicitly with VPNGUARD_DIR.
+var Dir = resolveDir()
+
+func resolveDir() string {
+	if d := os.Getenv("VPNGUARD_DIR"); d != "" {
+		return d
+	}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		if dirWritable(exeDir) {
+			return exeDir
+		}
+	}
+	return filepath.Join(os.Getenv("ProgramData"), "VPNGuard")
+}
+
+// dirWritable reports whether we can create files in dir (probe + cleanup).
+func dirWritable(dir string) bool {
+	probe := filepath.Join(dir, ".vpnguard-write-test")
+	f, err := os.OpenFile(probe, os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return false
+	}
+	f.Close()
+	os.Remove(probe)
+	return true
+}
 
 func Path() string      { return filepath.Join(Dir, "config.yaml") }
 func CachePath() string { return filepath.Join(Dir, "resolve-cache.json") }
@@ -235,11 +264,15 @@ func ParseOVPN(path string) ([]RemoteSpec, error) {
 			if len(fields) >= 2 {
 				if p, err := strconv.ParseUint(fields[1], 10, 16); err == nil {
 					defPort = uint16(p)
+					log.Printf("ovpn: global port = %d", defPort)
+				} else {
+					log.Printf("ovpn: WARNING bad `port %s`: %v", fields[1], err)
 				}
 			}
 		case "proto":
 			if len(fields) >= 2 {
 				defProto = normProto(fields[1])
+				log.Printf("ovpn: global proto = %s (from %q)", defProto, fields[1])
 			}
 		case "remote":
 			if len(fields) >= 2 {
@@ -247,12 +280,19 @@ func ParseOVPN(path string) ([]RemoteSpec, error) {
 				if len(fields) >= 3 {
 					if p, err := strconv.ParseUint(fields[2], 10, 16); err == nil {
 						r.Port = uint16(p)
+					} else {
+						log.Printf("ovpn: WARNING `remote %s` — port %q не распознан: %v (возьму порт по умолчанию)",
+							r.Host, fields[2], err)
 					}
 				}
 				if len(fields) >= 4 {
 					r.Proto = normProto(fields[3])
 				}
+				log.Printf("ovpn: remote host=%s port=%d proto=%q (raw: %q)",
+					r.Host, r.Port, r.Proto, line)
 				remotes = append(remotes, r)
+			} else {
+				log.Printf("ovpn: WARNING строка `remote` без адреса: %q", line)
 			}
 		}
 	}
@@ -270,6 +310,7 @@ func ParseOVPN(path string) ([]RemoteSpec, error) {
 	if len(remotes) == 0 {
 		return nil, fmt.Errorf("no `remote` directives found in %s", path)
 	}
+	log.Printf("ovpn: распознано endpoints: %d", len(remotes))
 	return remotes, nil
 }
 
@@ -302,19 +343,25 @@ func Resolve(remotes []RemoteSpec) ([]ResolvedEndpoint, error) {
 
 	for _, r := range remotes {
 		var ips []string
+		var src string
 		if addr, err := netip.ParseAddr(r.Host); err == nil {
 			ips = []string{addr.String()}
+			src = "IP напрямую"
 		} else if resolved, err := net.LookupIP(r.Host); err == nil && len(resolved) > 0 {
 			for _, ip := range resolved {
 				ips = append(ips, ip.String())
 			}
 			cache[r.Host] = ips
 			changed = true
+			src = "DNS"
 		} else if cached, ok := cache[r.Host]; ok {
 			ips = cached
+			src = "кэш"
 		} else {
+			log.Printf("resolve: НЕ УДАЛОСЬ разрешить %q и нет кэша: %v", r.Host, err)
 			return nil, fmt.Errorf("cannot resolve %q and no cached IPs: %v", r.Host, err)
 		}
+		log.Printf("resolve: %s -> %v (%s), порт %d/%s", r.Host, ips, src, r.Port, r.Proto)
 		for _, ip := range ips {
 			key := ip + ":" + strconv.Itoa(int(r.Port)) + "/" + r.Proto
 			if seen[key] {
@@ -327,6 +374,7 @@ func Resolve(remotes []RemoteSpec) ([]ResolvedEndpoint, error) {
 	if changed {
 		saveCache(cache)
 	}
+	log.Printf("resolve: итоговых permit-endpoints для сервера: %d", len(out))
 	return out, nil
 }
 
