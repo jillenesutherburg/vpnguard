@@ -80,14 +80,6 @@ public sealed class TrayAppContext : ApplicationContext
         };
         _icon.DoubleClick += (_, _) => ShowSettings(0);
 
-        if (!IsAdmin())
-        {
-            _icon.ShowBalloonTip(8000, "VPNGuard",
-                "Запущено без прав администратора: управление службой будет недоступно. " +
-                "Настройте «Автозапуск без UAC» из-под администратора один раз.",
-                ToolTipIcon.Warning);
-        }
-
         _timer = new System.Windows.Forms.Timer { Interval = 2000 };
         _timer.Tick += (_, _) => Refresh();
         _timer.Start();
@@ -291,16 +283,10 @@ public sealed class TrayAppContext : ApplicationContext
         return RunHidden("schtasks.exe", $"/Query /TN \"{TaskName}\"") == 0;
     }
 
-    /// <summary>Переключатель автозапуска: создаёт или удаляет задачу планировщика.</summary>
+    /// <summary>Переключатель автозапуска: создаёт или удаляет задачу планировщика
+    /// для текущего пользователя (админ-права не требуются).</summary>
     private void ToggleAutostart()
     {
-        if (!IsAdmin())
-        {
-            ShowError("Нужны права администратора. Запустите VpnGuard.Tray.exe один раз через " +
-                      "«Запуск от имени администратора» и повторите.");
-            return;
-        }
-
         if (AutostartTaskExists())
         {
             if (RunHidden("schtasks.exe", $"/Delete /F /TN \"{TaskName}\"") == 0)
@@ -313,8 +299,7 @@ public sealed class TrayAppContext : ApplicationContext
         else
         {
             var exe = Environment.ProcessPath ?? Application.ExecutablePath;
-            var args = $"/Create /F /TN \"{TaskName}\" /TR \"\\\"{exe}\\\"\" /SC ONLOGON /RL HIGHEST /IT";
-            if (RunHidden("schtasks.exe", args) == 0)
+            if (CreateAutostartTask(exe))
             {
                 _miAutostart.Checked = true;
                 _icon.ShowBalloonTip(4000, "VPNGuard",
@@ -324,6 +309,64 @@ public sealed class TrayAppContext : ApplicationContext
             else ShowError("Не удалось создать задачу планировщика.");
         }
     }
+
+    /// <summary>
+    /// Создаёт задачу автозапуска для ТЕКУЩЕГО пользователя без повышения прав.
+    /// Трею админ-права не нужны: он управляет службой через пайп (модель
+    /// OpenVPN GUI). Прошлая задача создавалась под admin и не стартовала при
+    /// входе обычного юзера — теперь UserId = текущий пользователь, LogonType
+    /// InteractiveToken, RunLevel LeastPrivilege. Стартует надёжно, без UAC.
+    /// </summary>
+    private static bool CreateAutostartTask(string exe)
+    {
+        var user = WindowsIdentity.GetCurrent().Name; // тот, кто сейчас в системе
+        var xml = $@"<?xml version=""1.0"" encoding=""UTF-16""?>
+<Task version=""1.2"" xmlns=""http://schemas.microsoft.com/windows/2004/02/mit/task"">
+  <RegistrationInfo>
+    <Description>VPNGuard tray — autostart at logon for the current user.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{Escape(user)}</UserId>
+      <Delay>PT10S</Delay>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id=""Author"">
+      <UserId>{Escape(user)}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>false</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context=""Author"">
+    <Exec>
+      <Command>{Escape(exe)}</Command>
+    </Exec>
+  </Actions>
+</Task>";
+
+        var tmp = Path.Combine(Path.GetTempPath(), "vpnguard-task.xml");
+        try
+        {
+            File.WriteAllText(tmp, xml, System.Text.Encoding.Unicode);
+            return RunHidden("schtasks.exe", $"/Create /F /TN \"{TaskName}\" /XML \"{tmp}\"") == 0;
+        }
+        catch { return false; }
+        finally { try { File.Delete(tmp); } catch { } }
+    }
+
+    private static string Escape(string s) =>
+        s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
     private static int RunHidden(string file, string args)
     {
@@ -335,12 +378,6 @@ public sealed class TrayAppContext : ApplicationContext
             return p.ExitCode;
         }
         catch { return -1; }
-    }
-
-    private static bool IsAdmin()
-    {
-        using var id = WindowsIdentity.GetCurrent();
-        return new WindowsPrincipal(id).IsInRole(WindowsBuiltInRole.Administrator);
     }
 
     // ------------------------------------------------------------------ прочее

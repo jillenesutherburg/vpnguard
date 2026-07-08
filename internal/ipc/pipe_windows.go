@@ -27,7 +27,17 @@ const PipeName = `\\.\pipe\VpnSentinelService`
 
 // Only SYSTEM and Administrators may talk to the service (the tray runs
 // elevated via the scheduled task, exactly like OpenVPN GUI).
-const pipeSDDL = "D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+// pipeSDDL: кто может обращаться к управляющему пайпу службы.
+//   SY  — SYSTEM (сама служба)
+//   BA  — администраторы
+//   IU  — интерактивно вошедшие пользователи (Interactive Users)
+// IU добавлен намеренно: трей запускается под обычным пользователем БЕЗ
+// админ-прав (та же модель, что у OpenVPN GUI — непривилегированный GUI +
+// привилегированная служба). Без IU обычный юзер не может подключиться к
+// пайпу, и трей "не видит службу".
+// GA=полный доступ для SY/BA; для IU даём чтение+запись (GR|GW), чтобы
+// можно было слать команды, но не менять DACL самого пайпа.
+const pipeSDDL = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)"
 
 type Request struct {
 	Cmd string `json:"cmd"`

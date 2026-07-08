@@ -89,22 +89,44 @@ Filename: "{app}\vpnguard.exe"; Parameters: "panic"; \
 const
   TrayTaskName = 'VPNGuard Tray';
 
-// Создаёт задачу планировщика: трей стартует при входе с наивысшими
-// правами и БЕЗ запроса UAC (тот же механизм, что у OpenVPN GUI).
-// Затем, если выбрана задача starttray, запускает трей сразу.
-// Кавычки в Pascal-строке экранируются удвоением ('') — путь к exe
-// заворачивается в двойные кавычки безопасно, без \"-костылей [Run].
+// Создаёт задачу автозапуска трея для ТЕКУЩЕГО пользователя (того, кто
+// запустил установку) без повышения прав. Трею админ не нужен — он управляет
+// службой через пайп (модель OpenVPN GUI). Прошлый вариант ставил задачу под
+// admin, и она не стартовала при входе обычного юзера. Используем XML-импорт.
 procedure SetupTrayAutostart;
 var
   RC: Integer;
-  TrayExe, CreateParams: String;
+  TrayExe, User, XmlPath, Xml: String;
 begin
   TrayExe := ExpandConstant('{app}\VpnGuard.Tray.exe');
-  CreateParams :=
-    '/Create /F /TN "' + TrayTaskName + '" ' +
-    '/TR "\"' + TrayExe + '\"" ' +
-    '/SC ONLOGON /RL HIGHEST /IT';
-  Exec('schtasks.exe', CreateParams, '', SW_HIDE, ewWaitUntilTerminated, RC);
+  // GetUserNameString возвращает того, кто запустил инсталлятор (обычно
+  // это и есть будущий пользователь трея, даже если установка с UAC).
+  User := GetEnv('USERDOMAIN') + '\' + GetEnv('USERNAME');
+  XmlPath := ExpandConstant('{tmp}\vpnguard-task.xml');
+
+  Xml :=
+    '<?xml version="1.0" encoding="UTF-8"?>' + #13#10 +
+    '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">' + #13#10 +
+    '  <Triggers><LogonTrigger><Enabled>true</Enabled>' +
+    '<UserId>' + User + '</UserId><Delay>PT10S</Delay></LogonTrigger></Triggers>' + #13#10 +
+    '  <Principals><Principal id="Author">' +
+    '<UserId>' + User + '</UserId><LogonType>InteractiveToken</LogonType>' +
+    '<RunLevel>LeastPrivilege</RunLevel></Principal></Principals>' + #13#10 +
+    '  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>' +
+    '<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>' +
+    '<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>' +
+    '<StartWhenAvailable>true</StartWhenAvailable>' +
+    '<ExecutionTimeLimit>PT0S</ExecutionTimeLimit></Settings>' + #13#10 +
+    '  <Actions Context="Author"><Exec><Command>' + TrayExe + '</Command></Exec></Actions>' + #13#10 +
+    '</Task>';
+
+  // XML задачи должен быть UTF-16; SaveStringToFile с True не подходит для
+  // BOM, поэтому пишем через SaveStringsToUTF8File нельзя — используем
+  // SaveStringToFile и полагаемся на то, что schtasks принимает и UTF-8 XML.
+  SaveStringToFile(XmlPath, Xml, False);
+  Exec('schtasks.exe', '/Create /F /TN "' + TrayTaskName + '" /XML "' + XmlPath + '"',
+    '', SW_HIDE, ewWaitUntilTerminated, RC);
+  DeleteFile(XmlPath);
 
   if WizardIsTaskSelected('starttray') then
     Exec('schtasks.exe', '/Run /TN "' + TrayTaskName + '"', '',
