@@ -21,8 +21,14 @@ public sealed class GuardConfig
 
     // ------------------------------------------------------------------ I/O
 
+    // Папка данных должна совпадать с той, что выбрала служба
+    // (см. resolveDir в Go). Для установленной инсталлятором службы это
+    // всегда %ProgramData%\VPNGuard. Переопределение через VPNGUARD_DIR
+    // поддерживаем на случай ручного/портативного сценария.
     public static string Dir =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "VPNGuard");
+        Environment.GetEnvironmentVariable("VPNGUARD_DIR") is { Length: > 0 } d
+            ? d
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "VPNGuard");
 
     public static string ConfigPath => Path.Combine(Dir, "config.yaml");
     public static string LogPath => Path.Combine(Dir, "vpnguard.log");

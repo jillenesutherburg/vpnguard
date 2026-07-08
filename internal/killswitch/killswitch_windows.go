@@ -291,11 +291,26 @@ func buildRules(cfg *Config, persistent bool) ([]*wf.Rule, error) {
 		add("block all", l, wf.ActionBlock, weightBlock)
 	}
 
-	// 2. Loopback.
+	// 2. Loopback. Полагаться только на флаг IS_LOOPBACK нельзя: для
+	// межпроцессного localhost-трафика (напр. Tor Browser -> tor.exe на
+	// 127.0.0.1:9150, проброшенные SOCKS-порты) на уровне ALE флаг может
+	// быть НЕ выставлен, и соединение упадёт в block all. Поэтому явно
+	// разрешаем loopback-подсети по адресу — это надёжно ловит весь
+	// localhost независимо от флага.
 	for _, l := range allLayers {
-		add("permit loopback", l, wf.ActionPermit, weightPermit,
+		add("permit loopback (flag)", l, wf.ActionPermit, weightPermit,
 			&wf.Match{Field: wf.FieldFlags, Op: wf.MatchTypeFlagsAllSet, Value: wf.ConditionFlagIsLoopback})
 	}
+	loopbackV4 := netip.MustParsePrefix("127.0.0.0/8")
+	loopbackV6 := netip.MustParsePrefix("::1/128")
+	add("permit loopback 127/8 out", wf.LayerALEAuthConnectV4, wf.ActionPermit, weightPermit,
+		&wf.Match{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypePrefix, Value: loopbackV4})
+	add("permit loopback 127/8 in", wf.LayerALEAuthRecvAcceptV4, wf.ActionPermit, weightPermit,
+		&wf.Match{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypePrefix, Value: loopbackV4})
+	add("permit loopback ::1 out", wf.LayerALEAuthConnectV6, wf.ActionPermit, weightPermit,
+		&wf.Match{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypePrefix, Value: loopbackV6})
+	add("permit loopback ::1 in", wf.LayerALEAuthRecvAcceptV6, wf.ActionPermit, weightPermit,
+		&wf.Match{Field: wf.FieldIPRemoteAddress, Op: wf.MatchTypePrefix, Value: loopbackV6})
 
 	// 3. DHCP (v4: client 68 -> server 67; v6: client 546 -> server 547).
 	add("permit DHCPv4 out", wf.LayerALEAuthConnectV4, wf.ActionPermit, weightPermit,

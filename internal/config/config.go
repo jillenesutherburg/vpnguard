@@ -19,23 +19,52 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Dir is the state directory: by default the folder next to the executable
-// (portable mode), so config/log/cache travel with the binary. If that
-// folder is not writable (e.g. installed under Program Files), we fall back
-// to %ProgramData%\VPNGuard. Override explicitly with VPNGUARD_DIR.
-var Dir = resolveDir()
+// Dir is the state directory. Selection logic:
+//  1. VPNGUARD_DIR env var wins (explicit override).
+//  2. If the executable lives under Program Files / Windows (i.e. installed
+//     by the setup, running as a service under LocalSystem), use
+//     %ProgramData%\VPNGuard — a stable, predictable location that both the
+//     service and the tray look at. This avoids the trap where a service
+//     under Program Files silently writes config next to the exe while the
+//     user edits a different file.
+//  3. Otherwise (portable: exe on Desktop, USB stick, etc.) use the folder
+//     next to the exe if writable, so config/log travel with the binary.
+//  4. Fallback: %ProgramData%\VPNGuard.
+var Dir, DirReason = resolveDir()
 
-func resolveDir() string {
+func resolveDir() (string, string) {
+	programData := filepath.Join(os.Getenv("ProgramData"), "VPNGuard")
+
 	if d := os.Getenv("VPNGUARD_DIR"); d != "" {
-		return d
+		return d, "переменная окружения VPNGUARD_DIR"
 	}
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		if dirWritable(exeDir) {
-			return exeDir
+	exe, err := os.Executable()
+	if err != nil {
+		return programData, "не удалось определить путь exe, использую ProgramData"
+	}
+	exeDir := filepath.Dir(exe)
+
+	if inSystemLocation(exeDir) {
+		return programData, "exe в системной папке (установлен) -> ProgramData"
+	}
+	if dirWritable(exeDir) {
+		return exeDir, "портативный режим: папка рядом с exe"
+	}
+	return programData, "папка рядом с exe недоступна для записи -> ProgramData"
+}
+
+// inSystemLocation reports whether dir is under Program Files or Windows.
+func inSystemLocation(dir string) bool {
+	dir = strings.ToLower(filepath.Clean(dir))
+	for _, env := range []string{"ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "SystemRoot", "windir"} {
+		if base := os.Getenv(env); base != "" {
+			base = strings.ToLower(filepath.Clean(base))
+			if dir == base || strings.HasPrefix(dir, base+string(filepath.Separator)) {
+				return true
+			}
 		}
 	}
-	return filepath.Join(os.Getenv("ProgramData"), "VPNGuard")
+	return false
 }
 
 // dirWritable reports whether we can create files in dir (probe + cleanup).

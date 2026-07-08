@@ -24,6 +24,7 @@ import (
 	"github.com/YOURNAME/vpnguard/internal/tunnels"
 	"github.com/YOURNAME/vpnguard/internal/vpnmon"
 	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
@@ -44,11 +45,31 @@ type handler struct{}
 
 func (h *handler) Execute(args []string, req <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
 	status <- svc.Status{State: svc.StartPending}
+
+	// runLoop сигналит через started, что инициализация (конфиг, WFP,
+	// первичное применение правил) прошла успешно. Только после этого
+	// сообщаем SCM Running — иначе быстрое падение выглядит как
+	// "запустилась и умерла", а трей стучится в несуществующий пайп.
 	stop := make(chan struct{})
 	done := make(chan error, 1)
-	go func() { done <- runLoop(stop) }()
+	started := make(chan struct{})
+	go func() { done <- runLoopSignaled(stop, started) }()
 
-	status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+	select {
+	case <-started:
+		status <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+	case err := <-done:
+		// упали ДО успешного старта — громко и в лог, и в Event Log
+		reportStartFailure(err)
+		status <- svc.Status{State: svc.Stopped}
+		return true, 1
+	case <-time.After(60 * time.Second):
+		reportStartFailure(fmt.Errorf("инициализация не завершилась за 60с"))
+		close(stop)
+		status <- svc.Status{State: svc.Stopped}
+		return true, 1
+	}
+
 	for {
 		select {
 		case c := <-req:
@@ -67,10 +88,24 @@ func (h *handler) Execute(args []string, req <-chan svc.ChangeRequest, status ch
 		case err := <-done:
 			if err != nil {
 				log.Printf("service loop failed: %v", err)
+				reportStartFailure(err)
 				status <- svc.Status{State: svc.Stopped}
 				return true, 1
 			}
 		}
+	}
+}
+
+// reportStartFailure дублирует критическую ошибку старта в Windows Event
+// Log (журнал "Приложения", источник VPNGuard) — так причина видна даже
+// если лог-файл не создался (нет прав/путь). Смотреть:
+//   Get-EventLog -LogName Application -Source VPNGuard -Newest 5
+func reportStartFailure(err error) {
+	msg := fmt.Sprintf("VPNGuard: служба не смогла стартовать: %v", err)
+	log.Print(msg)
+	if el, e := eventlog.Open(Name); e == nil {
+		_ = el.Error(1, msg)
+		_ = el.Close()
 	}
 }
 
@@ -87,9 +122,18 @@ type svcState struct {
 }
 
 func runLoop(stop <-chan struct{}) error {
+	return runLoopSignaled(stop, nil)
+}
+
+// runLoopSignaled закрывает started после того, как конфиг загружен, WFP-сессия
+// открыта и (если киллсвитч включён) endpoints построены — то есть после точки,
+// пройдя которую служба считается успешно стартовавшей. started может быть nil
+// (интерактивный режим).
+func runLoopSignaled(stop <-chan struct{}, started chan<- struct{}) error {
+	log.Printf("runLoop: загружаю конфиг из %s", config.Path())
 	cfg, err := config.Load()
 	if err != nil {
-		return err
+		return fmt.Errorf("загрузка конфига %s: %w", config.Path(), err)
 	}
 
 	st := &svcState{cfg: cfg, tm: tunnels.NewManager(cfg.Tunnels)}
@@ -97,7 +141,7 @@ func runLoop(stop <-chan struct{}) error {
 
 	st.ks, err = killswitch.New(cfg.Killswitch.Persistent)
 	if err != nil {
-		return err
+		return fmt.Errorf("открытие WFP-сессии (нужны права администратора): %w", err)
 	}
 	defer st.ks.Close()
 	log.Printf("режим киллсвитча: persistent=%v (%s)", cfg.Killswitch.Persistent,
@@ -106,7 +150,7 @@ func runLoop(stop <-chan struct{}) error {
 	if cfg.Killswitch.Enabled {
 		st.ksCfg, err = BuildKillswitchConfig(cfg, nil)
 		if err != nil {
-			return err
+			return fmt.Errorf("построение правил киллсвитча: %w", err)
 		}
 	} else {
 		log.Printf("kill switch отключён в конфиге; работаю только как супервизор туннелей")
@@ -126,6 +170,12 @@ func runLoop(stop <-chan struct{}) error {
 		vpnmon.New(cfg, st.onVPNChange).Run(ctx)
 		close(done)
 	}()
+
+	// Инициализация прошла — сигналим SCM, что старт успешен.
+	log.Printf("runLoop: инициализация завершена, служба готова")
+	if started != nil {
+		close(started)
+	}
 
 	<-stop
 	cancel()
@@ -314,6 +364,7 @@ func setupLog() {
 	}
 	log.Printf("=== VPNGuard старт ===")
 	log.Printf("рабочая директория (config/log/cache): %s", config.Dir)
+	log.Printf("  причина выбора: %s", config.DirReason)
 	log.Printf("конфиг: %s", config.Path())
 	log.Printf("лог:    %s", config.LogPath())
 	log.Printf("кэш:    %s", config.CachePath())
@@ -377,4 +428,117 @@ func argSuffix(arg string) string {
 		return ""
 	}
 	return " arg=" + arg
+}
+
+// Diagnose печатает полную картину для разбора проблем со стартом службы:
+// какие пути используются, где реально лежит конфиг, установлена ли служба,
+// её состояние и зарегистрированный путь exe, и хвост лога. Одна команда
+// вместо ручного перебора PowerShell.
+func Diagnose(w io.Writer) error {
+	fmt.Fprintln(w, "===== VPNGuard диагностика =====")
+	if exe, err := os.Executable(); err == nil {
+		fmt.Fprintf(w, "exe:                 %s\n", exe)
+	}
+	fmt.Fprintf(w, "рабочая директория:  %s\n", config.Dir)
+	fmt.Fprintf(w, "  причина выбора:    %s\n", config.DirReason)
+	fmt.Fprintf(w, "конфиг:              %s\n", config.Path())
+	if fi, err := os.Stat(config.Path()); err == nil {
+		fmt.Fprintf(w, "  -> есть, %d байт, изменён %s\n", fi.Size(), fi.ModTime().Format("2006-01-02 15:04:05"))
+	} else {
+		fmt.Fprintf(w, "  -> НЕ НАЙДЕН (%v) — служба не стартует без конфига! Запусти: vpnguard init\n", err)
+	}
+	fmt.Fprintf(w, "лог:                 %s\n", config.LogPath())
+	fmt.Fprintf(w, "кэш резолва:         %s\n", config.CachePath())
+
+	// Состояние службы через SCM.
+	fmt.Fprintln(w, "\n--- служба Windows ---")
+	if m, err := mgr.Connect(); err == nil {
+		defer m.Disconnect()
+		if s, err := m.OpenService(Name); err == nil {
+			defer s.Close()
+			if st, err := s.Query(); err == nil {
+				fmt.Fprintf(w, "состояние:           %s\n", svcStateName(st.State))
+			}
+			if cfg, err := s.Config(); err == nil {
+				fmt.Fprintf(w, "зарегистрированный путь: %s\n", cfg.BinaryPathName)
+				fmt.Fprintf(w, "тип запуска:         %s\n", startTypeName(cfg.StartType))
+			}
+		} else {
+			fmt.Fprintf(w, "служба НЕ установлена (%v)\n", err)
+			fmt.Fprintln(w, "  установить: vpnguard service install (от администратора)")
+		}
+	} else {
+		fmt.Fprintf(w, "не удалось подключиться к SCM: %v (нужны права администратора)\n", err)
+	}
+
+	// Пробуем достучаться до IPC-пайпа — это ровно то, что делает трей.
+	fmt.Fprintln(w, "\n--- IPC (то же, что проверяет трей) ---")
+	fmt.Fprintf(w, "пайп:                %s\n", ipc.PipeName)
+	// (само подключение проверяется треем; здесь только показываем имя)
+
+	// Хвост лога.
+	fmt.Fprintln(w, "\n--- последние строки лога ---")
+	if data, err := os.ReadFile(config.LogPath()); err == nil {
+		lines := splitTail(string(data), 30)
+		for _, ln := range lines {
+			fmt.Fprintln(w, ln)
+		}
+	} else {
+		fmt.Fprintf(w, "лог не прочитан (%v)\n", err)
+	}
+	fmt.Fprintln(w, "\n================================")
+	return nil
+}
+
+func svcStateName(s svc.State) string {
+	switch s {
+	case svc.Stopped:
+		return "ОСТАНОВЛЕНА (Stopped) — упала или не запускалась"
+	case svc.StartPending:
+		return "запускается (StartPending)"
+	case svc.StopPending:
+		return "останавливается (StopPending)"
+	case svc.Running:
+		return "РАБОТАЕТ (Running)"
+	default:
+		return fmt.Sprintf("состояние #%d", s)
+	}
+}
+
+func startTypeName(t uint32) string {
+	switch t {
+	case mgr.StartAutomatic:
+		return "автоматически"
+	case mgr.StartManual:
+		return "вручную"
+	case mgr.StartDisabled:
+		return "отключена"
+	default:
+		return fmt.Sprintf("тип #%d", t)
+	}
+}
+
+func splitTail(s string, n int) []string {
+	var lines []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			lines = append(lines, trimCR(s[start:i]))
+			start = i + 1
+		}
+	}
+	if start < len(s) {
+		lines = append(lines, trimCR(s[start:]))
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return lines
+}
+
+func trimCR(s string) string {
+	if len(s) > 0 && s[len(s)-1] == '\r' {
+		return s[:len(s)-1]
+	}
+	return s
 }

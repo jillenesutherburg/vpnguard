@@ -67,6 +67,9 @@ func run() error {
 		fmt.Print(out)
 		return nil
 
+	case "diag":
+		return wsvc.Diagnose(os.Stdout)
+
 	case "service":
 		if len(os.Args) < 3 {
 			usage()
@@ -177,5 +180,6 @@ func usage() {
   vpnguard enable               apply once, manually
   vpnguard disable | panic      remove ALL VPNGuard rules
   vpnguard interfaces           list network adapters with LUIDs
+  vpnguard diag                 print paths, service state, config presence, log tail
   vpnguard version`)
 }
